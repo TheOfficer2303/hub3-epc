@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1a1a1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HUB3→EPC">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>HUB3 → EPC QR konverter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&display=swap" rel="stylesheet">
+<!-- QR generator: qrcode-generator (standalone, no deps, exposes global `qrcode` factory) -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<!-- Image barcode reader: ZXing standalone UMD (includes PDF417 decoder, exposes global `ZXing`) -->
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f1ea;
+    --ink: #1a1a1a;
+    --paper: #ffffff;
+    --rule: #1a1a1a;
+    --accent: #d63816;
+    --accent-soft: #f5d4cb;
+    --ok: #2d6a3f;
+    --warn: #b87503;
+    --muted: #6b6b6b;
+    --grid: rgba(26,26,26,0.06);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); }
+  body {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 24px 24px;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+
+  header {
+    border: 2px solid var(--ink);
+    background: var(--paper);
+    padding: 24px 28px;
+    margin-bottom: 24px;
+    position: relative;
+  }
+  header::before {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    background: var(--ink);
+    z-index: -1;
+    transform: translate(8px, 8px);
+  }
+  .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 800;
+    font-size: clamp(32px, 5vw, 52px);
+    line-height: 0.95;
+    letter-spacing: -0.02em;
+  }
+  h1 .arrow {
+    color: var(--accent);
+    font-style: italic;
+    font-weight: 600;
+  }
+  .sub {
+    margin-top: 12px;
+    color: var(--muted);
+    max-width: 640px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    border: 2px solid var(--ink);
+    background: var(--paper);
+    padding: 20px;
+  }
+  .panel h2 {
+    font-family: 'Fraunces', serif;
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .panel .h-num {
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.2em;
+    margin-bottom: 4px;
+  }
+  .panel .h-desc {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 16px;
+    border: 1px solid var(--ink);
+  }
+  .tab {
+    flex: 1;
+    padding: 10px 12px;
+    background: var(--paper);
+    border: none;
+    border-right: 1px solid var(--ink);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .tab:last-child { border-right: none; }
+  .tab.active { background: var(--ink); color: var(--paper); }
+  .tab:hover:not(.active) { background: var(--accent-soft); }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  textarea, input[type="text"], input[type="number"] {
+    width: 100%;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    padding: 10px 12px;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    resize: vertical;
+  }
+  textarea:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  textarea { min-height: 280px; line-height: 1.4; }
+
+  .label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    margin-bottom: 6px;
+    color: var(--muted);
+  }
+
+  .field { margin-bottom: 12px; }
+
+  .upload-zone {
+    border: 2px dashed var(--ink);
+    padding: 32px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+    background: var(--paper);
+  }
+  .upload-zone:hover { background: var(--accent-soft); }
+  .upload-zone.drag { background: var(--accent-soft); border-color: var(--accent); }
+  .upload-zone p { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .upload-icon { font-size: 32px; }
+
+  .passdrop-tip {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-left: 3px solid var(--accent);
+    background: rgba(214, 56, 22, 0.04);
+    font-size: 12px;
+  }
+  .passdrop-tip .pd-head {
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .passdrop-tip p { color: var(--ink); }
+  .passdrop-tip a { color: var(--ink); font-weight: 600; }
+  .passdrop-tip a:hover { color: var(--accent); }
+
+  .btn {
+    display: inline-block;
+    padding: 12px 20px;
+    background: var(--ink);
+    color: var(--paper);
+    border: 2px solid var(--ink);
+    font-family: inherit;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-decoration: none;
+  }
+  .btn:hover { background: var(--accent); border-color: var(--accent); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); }
+  .btn-primary:hover { background: var(--ink); border-color: var(--ink); }
+  .btn-revolut {
+    background: #0075eb;
+    border-color: #0075eb;
+    color: #ffffff;
+  }
+  .btn-revolut:hover {
+    background: #005bb5;
+    border-color: #005bb5;
+  }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+  .preview-fields {
+    border-top: 1px solid var(--ink);
+    margin-top: 16px;
+    padding-top: 16px;
+  }
+  .pf-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px dashed rgba(26,26,26,0.1);
+    font-size: 12px;
+  }
+  .pf-row:last-child { border-bottom: none; }
+  .pf-key { color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; font-size: 10px; }
+  .pf-val { word-break: break-word; }
+  .pf-val.empty { color: var(--muted); font-style: italic; }
+  .pf-val.warn { color: var(--warn); }
+
+  #qr-output {
+    text-align: center;
+    padding: 20px;
+  }
+  #qrcanvas {
+    background: white;
+    padding: 12px;
+    border: 1px solid var(--ink);
+    max-width: 100%;
+    height: auto;
+  }
+  .qr-placeholder {
+    height: 280px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    border: 1px dashed var(--ink);
+  }
+
+  .epc-text {
+    background: #1a1a1a;
+    color: #e8e6df;
+    padding: 12px;
+    font-size: 11px;
+    line-height: 1.6;
+    margin-top: 16px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    border: 2px solid var(--ink);
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .alert {
+    border: 1px solid var(--ink);
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 12px;
+  }
+  .alert.error { background: #fde2dc; border-color: var(--accent); color: var(--accent); }
+  .alert.warn { background: #fef3d4; border-color: var(--warn); color: var(--warn); }
+  .alert.ok { background: #d4ecda; border-color: var(--ok); color: var(--ok); }
+  .alert ul { margin: 4px 0 0 18px; }
+
+  footer {
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid var(--ink);
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+  }
+  footer code { background: var(--paper); padding: 2px 6px; border: 1px solid var(--ink); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+  .badge.bic-found { background: var(--ok); }
+  .badge.bic-missing { background: var(--warn); }
+
+  .helper {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* Revolut modal */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(26,26,26,0.55);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 24px 16px;
+    z-index: 9999;
+    overflow-y: auto;
+    animation: fadeIn 0.15s ease-out;
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .modal {
+    background: var(--paper);
+    border: 2px solid var(--ink);
+    max-width: 520px;
+    width: 100%;
+    margin-top: 40px;
+    box-shadow: 8px 8px 0 var(--ink);
+  }
+  .modal-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 18px 20px 10px;
+    border-bottom: 1px solid var(--ink);
+  }
+  .modal-close {
+    background: none; border: none;
+    font-size: 28px; line-height: 1; cursor: pointer;
+    color: var(--ink); padding: 0; margin-top: -4px;
+  }
+  .modal-close:hover { color: var(--accent); }
+  .modal-body { padding: 16px 20px 20px; }
+  .modal-intro {
+    font-size: 12px; color: var(--muted); margin-bottom: 14px;
+    padding: 10px; background: rgba(214,56,22,0.06); border-left: 3px solid var(--accent);
+  }
+  .modal-intro strong { color: var(--ink); }
+  .rv-steps {
+    margin: 0 0 16px 20px;
+    font-size: 12px; line-height: 1.7;
+  }
+  .rv-steps li { margin-bottom: 4px; }
+  .rv-fields {
+    border-top: 1px dashed rgba(26,26,26,0.2);
+    border-bottom: 1px dashed rgba(26,26,26,0.2);
+    padding: 12px 0;
+    margin-bottom: 16px;
+  }
+  .rv-field { padding: 6px 0; }
+  .rv-label {
+    font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 4px;
+  }
+  .rv-row {
+    display: flex; gap: 8px; align-items: center; justify-content: space-between;
+  }
+  .rv-row code {
+    flex: 1;
+    background: var(--bg);
+    padding: 6px 10px;
+    border: 1px solid var(--ink);
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .rv-badge {
+    display: inline-block; padding: 1px 6px;
+    background: var(--ok); color: var(--paper);
+    font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+    margin-left: 6px;
+  }
+  .btn-mini {
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    padding: 5px 10px;
+    font-family: inherit;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .btn-mini:hover { background: var(--ink); color: var(--paper); }
+  .modal-actions {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .modal-foot {
+    font-size: 10px; color: var(--muted); margin-top: 12px; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">HUB3 <span class="arrow">→</span> EPC069-12</div>
+  <h1>Uplatnica<br>u <span class="arrow">Revolut</span> QR.</h1>
+  <p class="sub">Konvertira hrvatsku HUB3 uplatnicu (PDF417 barkod) u europski EPC QR kod koji možeš skenirati u Revolutu i drugim SEPA aplikacijama. Sve se izvršava lokalno u pregledniku — ništa se ne šalje na server.</p>
+</header>
+
+<div class="grid">
+
+  <!-- INPUT PANEL -->
+  <section class="panel">
+    <div class="h-num">01 / INPUT</div>
+    <h2>HUB3 podaci</h2>
+    <p class="h-desc">Paste teksta ili upload slike barkoda</p>
+
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="text" role="tab">Paste teksta</button>
+      <button class="tab" data-tab="image" role="tab">Slika barkoda</button>
+    </div>
+
+    <div class="tab-panel active" data-panel="text">
+      <label class="label" for="hub3-text">14 redaka, počevši s HRVHUB30</label>
+      <textarea id="hub3-text" spellcheck="false" placeholder="HRVHUB30
+EUR
+000000000012345
+IME PLATITELJA
+ADRESA PLATITELJA
+GRAD PLATITELJA
+PRIMATELJ D.O.O.
+ADRESA PRIMATELJA
+GRAD PRIMATELJA
+HR1210010051863000160
+HR01
+123-456-789
+COST
+Opis placanja"></textarea>
+      <div class="btn-row">
+        <button class="btn" id="load-example">Učitaj primjer</button>
+        <button class="btn btn-primary" id="parse-text">Parsiraj →</button>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-panel="image">
+      <div class="upload-zone" id="upload-zone">
+        <div class="upload-icon">⊞</div>
+        <strong>Klikni ili dovuci sliku</strong>
+        <p>PDF417 barkod s uplatnice (PNG, JPG)</p>
+        <input type="file" id="file-input" accept="image/*" style="display:none">
+      </div>
+      <div id="scan-status" class="helper"></div>
+
+      <div class="passdrop-tip">
+        <div class="pd-head">↗ Skener ne prepoznaje?</div>
+        <p>Otvori <a href="https://www.passdrop.app/extract-barcodes" target="_blank" rel="noopener">passdrop.app/extract-barcodes</a>, uploadaj sliku, kopiraj rezultat i paste-aj ga u tab "Paste teksta".</p>
+      </div>
+    </div>
+
+    <div id="parse-alerts"></div>
+  </section>
+
+  <!-- PARSED PANEL -->
+  <section class="panel">
+    <div class="h-num">02 / PARSED</div>
+    <h2>Prepoznata polja</h2>
+    <p class="h-desc">Provjeri prije generiranja</p>
+
+    <div id="parsed-empty" class="qr-placeholder">Čeka unos…</div>
+    <div id="parsed-content" style="display:none">
+      <div class="preview-fields" id="preview-fields"></div>
+    </div>
+  </section>
+
+</div>
+
+<!-- OUTPUT -->
+<section class="panel" style="margin-top: 24px;">
+  <div class="h-num">03 / OUTPUT</div>
+  <h2>EPC QR kod</h2>
+  <p class="h-desc">Skeniraj u Revolutu (Pay → Scan QR) ili u bilo kojoj SEPA banci</p>
+
+  <div class="grid" style="gap: 32px;">
+    <div id="qr-output">
+      <div class="qr-placeholder" id="qr-placeholder">QR će se prikazati ovdje</div>
+      <canvas id="qrcanvas" style="display:none"></canvas>
+      <div class="btn-row" id="qr-actions" style="display:none; justify-content:center; flex-wrap: wrap;">
+        <button class="btn btn-revolut" id="open-revolut">↗ Otvori u Revolutu</button>
+        <button class="btn" id="download-qr">↓ Download PNG</button>
+        <button class="btn" id="copy-text">Copy EPC tekst</button>
+      </div>
+    </div>
+    <div>
+      <label class="label">Sirov EPC payload (sadržaj QR koda)</label>
+      <div class="epc-text" id="epc-text">—</div>
+      <div id="epc-alerts" style="margin-top: 12px;"></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Format spec: <code>HRVHUB30</code> (HUB3) → <code>BCD/002/1/SCT</code> (EPC069-12 v2.) ·
+  Sve lokalno u pregledniku, bez slanja podataka.
+</footer>
+
+</div>
+
+<script>
+// =========================================================================
+// HUB3 → EPC QR converter
+// =========================================================================
+
+// -------------------------------------------------------------------------
+// BIC lookup table for Croatian banks (by IBAN bank code, positions 5-11)
+// Source: HNB list of credit institutions + SWIFT directory
+// -------------------------------------------------------------------------
+const HR_BIC_TABLE = {
+  '2340009': 'PBZGHR2X', // Privredna banka Zagreb
+  '2360000': 'ZABAHR2X', // Zagrebačka banka
+  '2390001': 'HPBZHR2X', // Hrvatska poštanska banka
+  '2400008': 'KARLHR2X', // Karlovačka banka
+  '2402006': 'ESBCHR22', // Erste & Steiermärkische Bank
+  '2407000': 'OTPVHR2X', // OTP banka Hrvatska
+  '2411006': 'BACXHR22', // UniCredit Bank / Zagrebačka (legacy)
+  '2412009': 'SLOBHR22', // Slatinska banka
+  '2481000': 'AGRMHR22', // Agram banka (Sberbank legacy)
+  '2484008': 'RZBHHR2X', // Raiffeisenbank Austria
+  '2485003': 'CROAHR2X', // Croatia banka
+  '2488001': 'BKBKHR22', // BKS Bank
+  '2489004': 'STBAHR22', // Štedbanka
+  '2492008': 'IMOBHR22', // Imex banka
+  '2493003': 'NAVBHR22', // Nava banka
+  '2500009': 'ADDIHR22', // Addiko Bank
+  '2503007': 'PMBPHR2X', // Partner banka
+  '2700000': 'HAABHR22', // Hypo Alpe-Adria (legacy → Addiko)
+  '4133006': 'ESBCHR22', // Erste (alt prefix)
+};
+
+function lookupBIC(iban) {
+  if (!iban || iban.length < 11 || !iban.startsWith('HR')) return null;
+  // HR IBAN format: HR + 2 check digits + 7 digit bank code + 10 digit account
+  const bankCode = iban.substring(4, 11);
+  return HR_BIC_TABLE[bankCode] || null;
+}
+
+// -------------------------------------------------------------------------
+// IBAN validation (ISO 13616 mod-97)
+// -------------------------------------------------------------------------
+function validateIBAN(iban) {
+  if (!iban) return false;
+  iban = iban.replace(/\s/g, '').toUpperCase();
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]+$/.test(iban)) return false;
+  if (iban.length < 15 || iban.length > 34) return false;
+  // Move first 4 chars to end, convert letters to digits (A=10..Z=35)
+  const rearranged = iban.substring(4) + iban.substring(0, 4);
+  let numeric = '';
+  for (const ch of rearranged) {
+    if (ch >= '0' && ch <= '9') numeric += ch;
+    else numeric += (ch.charCodeAt(0) - 55).toString();
+  }
+  // mod-97 in chunks
+  let remainder = 0;
+  for (let i = 0; i < numeric.length; i += 7) {
+    remainder = parseInt(String(remainder) + numeric.substr(i, 7), 10) % 97;
+  }
+  return remainder === 1;
+}
+
+// -------------------------------------------------------------------------
+// Parse HUB3 text (14 lines)
+// -------------------------------------------------------------------------
+function parseHUB3(text) {
+  // Normalize: split on any line break, trim trailing whitespace per line
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  // Tolerate trailing empty line
+  while (lines.length > 14 && lines[lines.length - 1] === '') lines.pop();
+
+  if (lines.length < 14) {
+    throw new Error(`HUB3 očekuje 14 redaka, dobiveno ${lines.length}. Provjeri da svako polje ima svoj red (i prazne redove za neobavezna polja).`);
+  }
+  if (lines[0].trim() !== 'HRVHUB30') {
+    throw new Error(`Prvi red mora biti "HRVHUB30", dobiveno: "${lines[0]}"`);
+  }
+
+  return {
+    header: lines[0].trim(),
+    currency: lines[1].trim(),
+    amount: lines[2].trim(),       // 15-digit, no decimal point
+    payerName: lines[3].trim(),
+    payerAddress: lines[4].trim(),
+    payerCity: lines[5].trim(),
+    receiverName: lines[6].trim(),
+    receiverAddress: lines[7].trim(),
+    receiverCity: lines[8].trim(),
+    iban: lines[9].trim().replace(/\s/g, ''),
+    model: lines[10].trim(),
+    reference: lines[11].trim(),
+    purpose: lines[12].trim(),
+    description: lines[13].trim(),
+  };
+}
+
+// -------------------------------------------------------------------------
+// Convert HUB3 amount (15-digit zero-padded, no decimal) → EPC format
+// e.g. "000000000012345" → "EUR123.45"
+// -------------------------------------------------------------------------
+function hub3AmountToEPC(amount15, currency) {
+  if (!/^\d+$/.test(amount15)) {
+    throw new Error(`Iznos mora biti samo znamenke, dobiveno: "${amount15}"`);
+  }
+  const padded = amount15.padStart(15, '0');
+  const intPart = padded.substring(0, 13).replace(/^0+/, '') || '0';
+  const fracPart = padded.substring(13);
+  const cur = (currency || 'EUR').toUpperCase();
+  return `${cur}${intPart}.${fracPart}`;
+}
+
+// -------------------------------------------------------------------------
+// Build unstructured reference from HUB3 model + reference
+// e.g. model "HR01", ref "123-456-789" → "HR01 123-456-789"
+// HR99 with empty ref → "" (no reference at all)
+// -------------------------------------------------------------------------
+function buildUnstructuredRef(model, reference) {
+  if (!model && !reference) return '';
+  if (model === 'HR99' && !reference) return '';
+  if (!reference) return model;
+  if (!model) return reference;
+  return `${model} ${reference}`;
+}
+
+// -------------------------------------------------------------------------
+// Sanitize text for EPC: remove diacritics, control chars
+// EPC allows UTF-8 but Croatian dijakritike sometimes fail in scanners,
+// so we keep them but strip control chars.
+// -------------------------------------------------------------------------
+function sanitizeForEPC(s) {
+  if (!s) return '';
+  return s.replace(/[\x00-\x1F\x7F]/g, '').trim();
+}
+
+// -------------------------------------------------------------------------
+// Build EPC payload (string that goes inside QR code)
+// -------------------------------------------------------------------------
+function buildEPC(parsed, bic) {
+  const epcAmount = hub3AmountToEPC(parsed.amount, parsed.currency);
+  const ref = buildUnstructuredRef(parsed.model, parsed.reference);
+  const desc = sanitizeForEPC(parsed.description).substring(0, 140);
+
+  // EPC v002 fields. BIC is optional in v002.
+  const fields = [
+    'BCD',                                          // 1: Service tag
+    '002',                                          // 2: Version
+    '1',                                            // 3: Charset (1=UTF-8)
+    'SCT',                                          // 4: Identification
+    bic || '',                                      // 5: BIC (optional in v002)
+    sanitizeForEPC(parsed.receiverName).substring(0, 70), // 6: Beneficiary name
+    parsed.iban.replace(/\s/g, '').toUpperCase(),   // 7: IBAN
+    epcAmount,                                      // 8: Amount
+    '',                                             // 9: Purpose (left empty; HUB3 codes don't always map)
+    '',                                             // 10: Structured reference (we use unstructured)
+    ref.substring(0, 140),                          // 11: Unstructured reference
+    '',                                             // 12: Beneficiary to originator
+  ];
+
+  // Trim trailing empty fields per spec (optional but cleaner)
+  while (fields.length > 0 && fields[fields.length - 1] === '') {
+    fields.pop();
+  }
+
+  return fields.join('\n');
+}
+
+// -------------------------------------------------------------------------
+// Main conversion pipeline
+// -------------------------------------------------------------------------
+function convert(hub3Text) {
+  const parsed = parseHUB3(hub3Text);
+  const warnings = [];
+  const errors = [];
+
+  // Validation
+  if (!parsed.iban) {
+    errors.push('IBAN je prazan.');
+  } else if (!validateIBAN(parsed.iban)) {
+    errors.push(`IBAN "${parsed.iban}" ne prolazi mod-97 validaciju.`);
+  }
+
+  if (!parsed.amount || parsed.amount === '000000000000000') {
+    warnings.push('Iznos je 0 — neki scanneri ne prihvaćaju nulti iznos.');
+  }
+
+  if (parsed.currency !== 'EUR') {
+    warnings.push(`Valuta je "${parsed.currency}". EPC QR podržava samo EUR — generirat ću s EUR-om svejedno, ali provjeri.`);
+  }
+
+  if (!parsed.receiverName) {
+    errors.push('Ime primatelja je obavezno.');
+  }
+
+  // BIC lookup
+  const bic = lookupBIC(parsed.iban);
+  if (!bic) {
+    warnings.push('BIC nije pronađen u tablici za ovaj IBAN. EPC v002 ga ne zahtijeva, ali stariji scanneri mogu tražiti BIC.');
+  }
+
+  // Build payload
+  let payload = '';
+  if (errors.length === 0) {
+    payload = buildEPC(parsed, bic);
+    if (new TextEncoder().encode(payload).length > 331) {
+      errors.push(`EPC payload je ${new TextEncoder().encode(payload).length} bajtova — limit je 331. Skrati opis ili referencu.`);
+    }
+  }
+
+  return { parsed, bic, payload, warnings, errors };
+}
+
+// =========================================================================
+// UI
+// =========================================================================
+const $ = (id) => document.getElementById(id);
+
+// --- Tabs ---
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelector(`.tab-panel[data-panel="${tab.dataset.tab}"]`).classList.add('active');
+  });
+});
+
+// --- Example ---
+$('load-example').addEventListener('click', () => {
+  $('hub3-text').value = `HRVHUB30
+EUR
+000000000012550
+MARKO MARULIC
+TRG SV STJEPANA 1
+21000 SPLIT
+HEP OPSKRBA D.O.O.
+ULICA GRADA VUKOVARA 37
+10000 ZAGREB
+HR1723600001101234565
+HR01
+2024-001-12345
+ELEC
+Racun za struju 12/2024`;
+  parseAndRender($('hub3-text').value);
+});
+
+// --- Text parse ---
+$('parse-text').addEventListener('click', () => {
+  parseAndRender($('hub3-text').value);
+});
+
+// --- File upload / scan ---
+const uploadZone = $('upload-zone');
+const fileInput = $('file-input');
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('drag'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag'));
+uploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+async function handleFile(file) {
+  const status = $('scan-status');
+  status.innerHTML = '<span style="color:var(--warn)">⏳ Učitavam sliku i tražim barkod…</span>';
+
+  if (typeof ZXing === 'undefined') {
+    status.innerHTML = '<span style="color:var(--accent)">✗ Skener biblioteka nije se učitala. Probaj paste teksta umjesto slike.</span>';
+    return;
+  }
+
+  try {
+    const imgUrl = URL.createObjectURL(file);
+    // ZXing.BrowserMultiFormatReader handles PDF417, QR, Code 128, etc.
+    const reader = new ZXing.BrowserMultiFormatReader();
+
+    let result;
+    try {
+      result = await reader.decodeFromImageUrl(imgUrl);
+    } finally {
+      URL.revokeObjectURL(imgUrl);
+    }
+
+    if (!result) {
+      status.innerHTML = '<span style="color:var(--accent)">✗ Barkod nije pronađen. Probaj jasniju sliku ili paste tekst ručno.</span>';
+      return;
+    }
+
+    const decoded = result.getText ? result.getText() : String(result);
+    if (!decoded.startsWith('HRVHUB30')) {
+      status.innerHTML = `<span style="color:var(--warn)">⚠ Barkod pronađen ali ne počinje s HRVHUB30. Sadržaj: ${esc(decoded.substring(0, 60))}…</span>`;
+      // Still populate the textarea so user can inspect
+      $('hub3-text').value = decoded;
+      document.querySelector('.tab[data-tab="text"]').click();
+      return;
+    }
+    status.innerHTML = '<span style="color:var(--ok)">✓ Barkod uspješno pročitan</span>';
+    $('hub3-text').value = decoded;
+    document.querySelector('.tab[data-tab="text"]').click();
+    parseAndRender(decoded);
+  } catch (err) {
+    status.innerHTML = `<span style="color:var(--accent)">✗ Greška pri čitanju: ${esc(err.message || err)}</span>`;
+  }
+}
+
+// --- Render ---
+function parseAndRender(text) {
+  const alertsBox = $('parse-alerts');
+  const epcAlertsBox = $('epc-alerts');
+  alertsBox.innerHTML = '';
+  epcAlertsBox.innerHTML = '';
+
+  if (!text || !text.trim()) {
+    showAlert(alertsBox, 'error', 'Unesi HUB3 tekst.');
+    return;
+  }
+
+  let result;
+  try {
+    result = convert(text);
+  } catch (err) {
+    showAlert(alertsBox, 'error', err.message);
+    $('parsed-empty').style.display = 'flex';
+    $('parsed-content').style.display = 'none';
+    hideQR();
+    return;
+  }
+
+  // Show parsed fields
+  renderParsed(result);
+
+  // Show alerts
+  if (result.errors.length > 0) {
+    showAlert(alertsBox, 'error', 'Greške koje sprečavaju generiranje:', result.errors);
+    hideQR();
+    return;
+  }
+  if (result.warnings.length > 0) {
+    showAlert(epcAlertsBox, 'warn', 'Upozorenja:', result.warnings);
+  } else {
+    showAlert(epcAlertsBox, 'ok', '✓ Sve provjere prošle. QR spreman za skeniranje.');
+  }
+
+  // Generate QR
+  renderQR(result.payload);
+
+  // Store globally for Revolut share button
+  window._lastResult = result;
+}
+
+function renderParsed(result) {
+  $('parsed-empty').style.display = 'none';
+  $('parsed-content').style.display = 'block';
+  const p = result.parsed;
+  const epcAmt = (() => { try { return hub3AmountToEPC(p.amount, p.currency); } catch { return '—'; } })();
+  const ref = buildUnstructuredRef(p.model, p.reference) || '(prazno)';
+  const bicBadge = result.bic
+    ? `<span class="badge bic-found">FOUND</span> ${result.bic}`
+    : `<span class="badge bic-missing">MISSING</span> nije u tablici`;
+  const ibanValid = validateIBAN(p.iban);
+  const ibanBadge = ibanValid
+    ? `<span style="color:var(--ok)">✓</span>`
+    : `<span style="color:var(--accent)">✗ INVALID</span>`;
+
+  $('preview-fields').innerHTML = `
+    <div class="pf-row"><div class="pf-key">Primatelj</div><div class="pf-val">${esc(p.receiverName) || '<em>prazno</em>'}</div></div>
+    <div class="pf-row"><div class="pf-key">IBAN</div><div class="pf-val">${esc(p.iban)} ${ibanBadge}</div></div>
+    <div class="pf-row"><div class="pf-key">BIC (auto)</div><div class="pf-val">${bicBadge}</div></div>
+    <div class="pf-row"><div class="pf-key">Iznos</div><div class="pf-val">${esc(epcAmt)} <span style="color:var(--muted)">← ${esc(p.amount)} ${esc(p.currency)}</span></div></div>
+    <div class="pf-row"><div class="pf-key">Model + poziv</div><div class="pf-val">${esc(ref)}</div></div>
+    <div class="pf-row"><div class="pf-key">Šifra namjene</div><div class="pf-val ${p.purpose ? '' : 'empty'}">${esc(p.purpose) || '(prazno — izostavlja se u EPC-u)'}</div></div>
+    <div class="pf-row"><div class="pf-key">Opis</div><div class="pf-val">${esc(p.description) || '<em>prazno</em>'}</div></div>
+    <div class="pf-row"><div class="pf-key">Platitelj</div><div class="pf-val" style="color:var(--muted)">${esc(p.payerName) || '—'} <span style="font-size:10px">(EPC ne sadrži podatke o platitelju)</span></div></div>
+  `;
+}
+
+function renderQR(payload) {
+  $('qr-placeholder').style.display = 'none';
+  const canvas = $('qrcanvas');
+  canvas.style.display = 'inline-block';
+  $('qr-actions').style.display = 'flex';
+
+  if (typeof qrcode === 'undefined') {
+    showAlert($('epc-alerts'), 'error',
+      'QR biblioteka nije se učitala. Provjeri internet konekciju i refreshaj stranicu. Sirovi EPC payload je svejedno spreman ispod.');
+    canvas.style.display = 'none';
+    $('qr-placeholder').style.display = 'flex';
+    $('qr-placeholder').textContent = 'QR biblioteka nije dostupna';
+    $('epc-text').textContent = payload.replace(/\n/g, '\\n\n');
+    return;
+  }
+
+  try {
+    // qrcode-generator: typeNumber=0 means auto-detect smallest fitting version
+    // errorCorrectionLevel: 'M' = ~15% recovery, recommended for EPC
+    const qr = qrcode(0, 'M');
+    qr.addData(payload, 'Byte'); // Byte mode handles UTF-8 correctly
+    qr.make();
+
+    // Draw to canvas
+    const moduleCount = qr.getModuleCount();
+    const cellSize = 8;
+    const margin = 16;
+    const size = moduleCount * cellSize + margin * 2;
+    canvas.width = size;
+    canvas.height = size;
+    canvas.style.width = '320px';
+    canvas.style.height = '320px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#1a1a1a';
+    for (let row = 0; row < moduleCount; row++) {
+      for (let col = 0; col < moduleCount; col++) {
+        if (qr.isDark(row, col)) {
+          ctx.fillRect(
+            margin + col * cellSize,
+            margin + row * cellSize,
+            cellSize, cellSize
+          );
+        }
+      }
+    }
+  } catch (err) {
+    showAlert($('epc-alerts'), 'error', 'QR generiranje neuspjelo: ' + err.message);
+    canvas.style.display = 'none';
+    $('qr-placeholder').style.display = 'flex';
+  }
+
+  $('epc-text').textContent = payload.replace(/\n/g, '\\n\n');
+}
+
+function hideQR() {
+  $('qr-placeholder').style.display = 'flex';
+  $('qrcanvas').style.display = 'none';
+  $('qr-actions').style.display = 'none';
+  $('epc-text').textContent = '—';
+}
+
+function showAlert(container, type, msg, list) {
+  const div = document.createElement('div');
+  div.className = `alert ${type}`;
+  let html = `<strong>${esc(msg)}</strong>`;
+  if (list && list.length) {
+    html += '<ul>' + list.map(l => `<li>${esc(l)}</li>`).join('') + '</ul>';
+  }
+  div.innerHTML = html;
+  container.appendChild(div);
+}
+
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// --- Download / copy ---
+$('download-qr').addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.download = 'epc-qr.png';
+  link.href = $('qrcanvas').toDataURL('image/png');
+  link.click();
+});
+
+$('copy-text').addEventListener('click', async () => {
+  const text = $('epc-text').textContent.replace(/\\n\n/g, '\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    const btn = $('copy-text');
+    const orig = btn.textContent;
+    btn.textContent = '✓ Kopirano';
+    setTimeout(() => btn.textContent = orig, 1500);
+  } catch {
+    alert('Kopiranje nije uspjelo. Označi tekst ručno.');
+  }
+});
+
+// --- Open in Revolut ---
+// Revolut nema javni deep link za prefilling bank transfera. Workaround:
+// kopiramo IBAN u clipboard, pokažemo modal s ostalim podacima za paste,
+// pa otvorimo Revolut app preko revolut://app/payments (ako instalirano).
+$('open-revolut').addEventListener('click', async () => {
+  const r = window._lastResult;
+  if (!r || !r.parsed) {
+    alert('Prvo parsiraj HUB3 podatke.');
+    return;
+  }
+  const p = r.parsed;
+  const iban = p.iban.replace(/\s/g, '').toUpperCase();
+  const epcAmount = (() => { try { return hub3AmountToEPC(p.amount, p.currency); } catch { return ''; } })();
+  const amountForDisplay = epcAmount.replace(/^[A-Z]{3}/, ''); // strip "EUR"
+  const ref = buildUnstructuredRef(p.model, p.reference);
+
+  // Copy IBAN to clipboard automatically
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(iban);
+    copied = true;
+  } catch {}
+
+  // Show explanation modal
+  showRevolutModal({
+    iban, amount: amountForDisplay, currency: (p.currency || 'EUR'),
+    name: p.receiverName, ref, desc: p.description, copied
+  });
+});
+
+function showRevolutModal({ iban, amount, currency, name, ref, desc, copied }) {
+  // Remove existing if any
+  document.getElementById('revolut-modal')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'revolut-modal';
+  modal.className = 'modal-backdrop';
+  modal.innerHTML = `
+    <div class="modal">
+      <div class="modal-head">
+        <div>
+          <div class="h-num">REVOLUT TRANSFER</div>
+          <h2 style="font-family:'Fraunces',serif;font-size:22px;">Podaci za uplatu</h2>
+        </div>
+        <button class="modal-close" aria-label="Zatvori">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-intro">Revolut nema javni deep link s prefilanim podacima — moraš ih unijeti ručno. ${copied ? '<strong>IBAN je već kopiran u clipboard.</strong>' : ''}</p>
+
+        <ol class="rv-steps">
+          <li><strong>Otvori Revolut</strong> i odaberi <em>Payments → New payment → Bank transfer</em></li>
+          <li><strong>Paste IBAN</strong> u polje za broj računa ${copied ? '(već je kopiran)' : '(klikni "Kopiraj IBAN" dolje)'}</li>
+          <li><strong>Unesi ostale podatke</strong> ispod (svaki redak ima svoj copy gumb)</li>
+        </ol>
+
+        <div class="rv-fields">
+          <div class="rv-field">
+            <div class="rv-label">IBAN ${copied ? '<span class="rv-badge">u clipboardu</span>' : ''}</div>
+            <div class="rv-row"><code>${esc(iban)}</code><button class="btn-mini" data-copy="${esc(iban)}">Kopiraj</button></div>
+          </div>
+          <div class="rv-field">
+            <div class="rv-label">Primatelj</div>
+            <div class="rv-row"><code>${esc(name)}</code><button class="btn-mini" data-copy="${esc(name)}">Kopiraj</button></div>
+          </div>
+          <div class="rv-field">
+            <div class="rv-label">Iznos (${esc(currency)})</div>
+            <div class="rv-row"><code>${esc(amount)}</code><button class="btn-mini" data-copy="${esc(amount)}">Kopiraj</button></div>
+          </div>
+          ${ref ? `<div class="rv-field">
+            <div class="rv-label">Reference / opis</div>
+            <div class="rv-row"><code>${esc(ref)}${desc ? ' — ' + esc(desc) : ''}</code><button class="btn-mini" data-copy="${esc(ref + (desc ? ' — ' + desc : ''))}">Kopiraj</button></div>
+          </div>` : (desc ? `<div class="rv-field">
+            <div class="rv-label">Opis</div>
+            <div class="rv-row"><code>${esc(desc)}</code><button class="btn-mini" data-copy="${esc(desc)}">Kopiraj</button></div>
+          </div>` : '')}
+        </div>
+
+        <div class="modal-actions">
+          <a href="revolut://app/payments" class="btn btn-revolut" id="rv-launch">↗ Otvori Revolut app</a>
+          <button class="btn" id="rv-close">Zatvori</button>
+        </div>
+        <p class="modal-foot">Ako se Revolut ne otvori automatski, otvori app ručno — podaci ostaju ovdje.</p>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  modal.querySelector('.modal-close').addEventListener('click', () => modal.remove());
+  modal.querySelector('#rv-close').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+  // Wire up copy buttons
+  modal.querySelectorAll('[data-copy]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        const orig = btn.textContent;
+        btn.textContent = '✓';
+        setTimeout(() => btn.textContent = orig, 1200);
+      } catch {
+        alert('Kopiranje nije uspjelo.');
+      }
+    });
+  });
+}
+
+// Auto-parse on textarea blur if there's content
+$('hub3-text').addEventListener('blur', () => {
+  if ($('hub3-text').value.trim()) parseAndRender($('hub3-text').value);
+});
+
+// =========================================================================
+// PWA: Service Worker registration
+// =========================================================================
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(err => {
+      console.warn('SW registration failed:', err);
+    });
+  });
+}
+</script>
+</body>
+</html>

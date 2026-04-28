@@ -1,0 +1,32 @@
+{
+  "name": "HUB3 → EPC QR konverter",
+  "short_name": "HUB3→EPC",
+  "description": "Konvertira hrvatsku HUB3 uplatnicu u EPC QR kod za Revolut i SEPA banke",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f1ea",
+  "theme_color": "#1a1a1a",
+  "lang": "hr",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

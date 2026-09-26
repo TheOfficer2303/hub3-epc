@@ -655,8 +655,10 @@ function sanitizeForEPC(s) {
 // -------------------------------------------------------------------------
 function buildEPC(parsed, bic) {
   const epcAmount = hub3AmountToEPC(parsed.amount, parsed.currency);
-  const ref = buildUnstructuredRef(parsed.model, parsed.reference);
-  const desc = sanitizeForEPC(parsed.description).substring(0, 140);
+  const ref = [
+    buildUnstructuredRef(parsed.model, parsed.reference),
+    sanitizeForEPC(parsed.description),
+  ].filter(Boolean).join(' ');
 
   // EPC v002 fields. BIC is optional in v002.
   const fields = [
@@ -807,7 +809,7 @@ async function handleFile(file) {
       return;
     }
 
-    const decoded = result.getText ? result.getText() : String(result);
+    const decoded = fixBarcodeCharset(result.getText ? result.getText() : String(result));
     if (!decoded.startsWith('HRVHUB30')) {
       status.innerHTML = `<span style="color:var(--warn)">⚠ Barkod pronađen ali ne počinje s HRVHUB30. Sadržaj: ${esc(decoded.substring(0, 60))}…</span>`;
       // Still populate the textarea so user can inspect
@@ -821,6 +823,17 @@ async function handleFile(file) {
     parseAndRender(decoded);
   } catch (err) {
     status.innerHTML = `<span style="color:var(--accent)">✗ Greška pri čitanju: ${esc(err.message || err)}</span>`;
+  }
+}
+
+// HUB3 PDF417 is ISO-8859-2, but ZXing decodes it as ISO-8859-1
+function fixBarcodeCharset(text) {
+  if (/[^\x00-\xFF]/.test(text)) return text;
+  const bytes = Uint8Array.from(text, (c) => c.charCodeAt(0));
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder('iso-8859-2').decode(bytes);
   }
 }
 
@@ -914,6 +927,7 @@ function renderQR(payload) {
   try {
     // qrcode-generator: typeNumber=0 means auto-detect smallest fitting version
     // errorCorrectionLevel: 'M' = ~15% recovery, recommended for EPC
+    qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
     const qr = qrcode(0, 'M');
     qr.addData(payload, 'Byte'); // Byte mode handles UTF-8 correctly
     qr.make();

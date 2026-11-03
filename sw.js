@@ -48,7 +48,6 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
-  // Network-first for the page itself so updates roll out
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req).then((response) => {

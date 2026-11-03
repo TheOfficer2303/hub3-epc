@@ -1523,6 +1523,42 @@ $('hub3-text').addEventListener('blur', () => {
   if ($('hub3-text').value.trim()) parseAndRender($('hub3-text').value);
 });
 
+// ?rvtest: guesses for undocumented Revolut prefill params, to try on a real phone
+if (new URLSearchParams(location.search).has('rvtest')) {
+  const t = { iban: 'HR1723600001101234565', amount: '1.23', currency: 'EUR', name: 'TEST PRIMATELJ', reference: 'HR00 123' };
+  const epc = ['BCD', '002', '1', 'SCT', '', t.name, t.iban, 'EUR' + t.amount, '', '', t.reference].join('\n');
+  const q = (o) => new URLSearchParams(o).toString();
+  const basic = q(t);
+  const links = [
+    `app/payments?${basic}`,
+    `app/payments/new?${basic}`,
+    `app/payments/bank-transfer?${basic}`,
+    `app/payments/transfer?${basic}`,
+    `app/transfer?${basic}`,
+    `app/transfers/new?${basic}`,
+    `app/bank-transfer?${basic}`,
+    `app/send?${basic}`,
+    `app/pay?${basic}`,
+    `app/payments?${q({ recipientIban: t.iban, recipientName: t.name, amount: t.amount, currency: t.currency, reference: t.reference })}`,
+    `app/payments?${q({ accountNumber: t.iban, beneficiaryName: t.name, amount: t.amount, currency: t.currency, description: t.reference })}`,
+    `app/payments?${q({ epc })}`,
+    `app/payments?${q({ qr: epc })}`,
+    `app/scan?${q({ data: epc })}`,
+    'app/scan',
+    'app/qr',
+    'app/payments/scan',
+  ].map((path) => `revolut://${path}`);
+  const href = (url) => IS_ANDROID
+    ? `intent://${url.slice('revolut://'.length)}#Intent;scheme=revolut;package=com.revolut.revolut;end`
+    : url;
+  const box = document.createElement('section');
+  box.className = 'panel';
+  box.style.marginBottom = '24px';
+  box.innerHTML = '<div class="h-num">REVOLUT PREFILL TEST</div><p class="h-desc">Tapni svaki link. Zanima me koji popuni IBAN / iznos (1.23 EUR) / ime ili otvori skener. Ništa ne potvrđuj.</p>'
+    + links.map((u, i) => `<p style="margin:6px 0"><a class="btn" style="display:block;text-transform:none;word-break:break-all;font-size:11px" href="${esc(href(u))}">${i + 1}. ${esc(decodeURIComponent(u).replace(/\n/g, '⏎'))}</a></p>`).join('');
+  document.querySelector('.wrap').prepend(box);
+}
+
 // Restore last bill when returning from Revolut (mobile browsers may reload the page)
 const restored = loadState();
 if (restored?.text) {

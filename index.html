@@ -16,8 +16,8 @@
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&display=swap" rel="stylesheet">
 <!-- QR generator: qrcode-generator (standalone, no deps, exposes global `qrcode` factory) -->
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
-<!-- Image barcode reader: ZXing standalone UMD (includes PDF417 decoder, exposes global `ZXing`) -->
-<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<!-- Barcode reader: zxing-cpp compiled to WASM (exposes global `ZXingWASM`) -->
+<script src="https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.6/dist/iife/reader/index.js"></script>
 <style>
   :root {
     --bg: #f4f1ea;
@@ -178,6 +178,29 @@
   .upload-zone.drag { background: var(--accent-soft); border-color: var(--accent); }
   .upload-zone p { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .upload-icon { font-size: 32px; }
+
+  .cam-box {
+    position: relative;
+    border: 2px solid var(--ink);
+    background: #000;
+    overflow: hidden;
+    display: none;
+  }
+  .cam-box.on { display: block; }
+  .cam-box video { display: block; width: 100%; height: auto; }
+  .cam-guide {
+    position: absolute;
+    left: 5%; right: 5%; top: 30%; bottom: 30%;
+    border: 2px solid var(--accent);
+    box-shadow: 0 0 0 9999px rgba(0,0,0,0.35);
+    pointer-events: none;
+  }
+  .cam-hint {
+    position: absolute; left: 0; right: 0; bottom: 8px;
+    text-align: center; color: #fff; font-size: 11px;
+    text-shadow: 0 1px 2px #000;
+    pointer-events: none;
+  }
 
   .passdrop-tip {
     margin-top: 14px;
@@ -425,14 +448,29 @@
   <section class="panel">
     <div class="h-num">01 / INPUT</div>
     <h2>HUB3 podaci</h2>
-    <p class="h-desc">Paste teksta ili upload slike barkoda</p>
+    <p class="h-desc">Skeniraj kamerom, uploadaj sliku ili paste-aj tekst</p>
 
     <div class="tabs" role="tablist">
-      <button class="tab active" data-tab="text" role="tab">Paste teksta</button>
-      <button class="tab" data-tab="image" role="tab">Slika barkoda</button>
+      <button class="tab active" data-tab="camera" role="tab">Kamera</button>
+      <button class="tab" data-tab="image" role="tab">Slika</button>
+      <button class="tab" data-tab="text" role="tab">Tekst</button>
     </div>
 
-    <div class="tab-panel active" data-panel="text">
+    <div class="tab-panel active" data-panel="camera">
+      <div class="cam-box" id="cam-box">
+        <video id="cam-video" playsinline muted></video>
+        <div class="cam-guide"></div>
+        <div class="cam-hint">Barkod vodoravno unutar okvira, cijeli i oštar</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="cam-start">▶ Pokreni kameru</button>
+        <button class="btn" id="cam-stop" style="display:none">■ Zaustavi</button>
+        <button class="btn" id="cam-torch" style="display:none">☀ Svjetlo</button>
+      </div>
+      <div id="cam-status" class="helper"></div>
+    </div>
+
+    <div class="tab-panel" data-panel="text">
       <label class="label" for="hub3-text">14 redaka, počevši s HRVHUB30</label>
       <textarea id="hub3-text" spellcheck="false" placeholder="HRVHUB30
 EUR
@@ -458,7 +496,7 @@ Opis placanja"></textarea>
       <div class="upload-zone" id="upload-zone">
         <div class="upload-icon">⊞</div>
         <strong>Klikni ili dovuci sliku</strong>
-        <p>PDF417 barkod s uplatnice (PNG, JPG)</p>
+        <p>PDF417 barkod s uplatnice (PNG, JPG, screenshot)</p>
         <input type="file" id="file-input" accept="image/*" style="display:none">
       </div>
       <div id="scan-status" class="helper"></div>
@@ -583,9 +621,11 @@ function validateIBAN(iban) {
 // -------------------------------------------------------------------------
 function parseHUB3(text) {
   // Normalize: split on any line break, trim trailing whitespace per line
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const lines = text.replace(/^﻿/, '').replace(/^\s+/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   // Tolerate trailing empty line
   while (lines.length > 14 && lines[lines.length - 1] === '') lines.pop();
+  // Some issuers drop trailing empty fields (model, reference, purpose, description)
+  if (lines.length >= 10) while (lines.length < 14) lines.push('');
 
   if (lines.length < 14) {
     throw new Error(`HUB3 očekuje 14 redaka, dobiveno ${lines.length}. Provjeri da svako polje ima svoj red (i prazne redove za neobavezna polja).`);
@@ -741,6 +781,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     tab.classList.add('active');
     document.querySelector(`.tab-panel[data-panel="${tab.dataset.tab}"]`).classList.add('active');
+    if (tab.dataset.tab !== 'camera') stopCamera();
   });
 });
 
@@ -781,60 +822,219 @@ uploadZone.addEventListener('drop', (e) => {
 });
 fileInput.addEventListener('change', (e) => {
   if (e.target.files[0]) handleFile(e.target.files[0]);
+  e.target.value = '';
 });
+
+// --- Barcode decoding (zxing-cpp WASM) ---
+const ZX_BASE = {
+  formats: ['PDF417'],
+  tryHarder: true,
+  tryRotate: true,
+  tryInvert: true,
+  tryDownscale: true,
+  maxNumberOfSymbols: 1,
+  textMode: 'Plain',
+};
+
+if (typeof ZXingWASM !== 'undefined') {
+  ZXingWASM.prepareZXingModule({ fireImmediately: true }).catch(() => {});
+}
+
+// HUB3 spec says ISO-8859-2, but some issuers write UTF-8; ECI markers are unreliable
+function decodeHub3Bytes(r) {
+  if (!r.bytes?.length) return r.text;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(r.bytes);
+  } catch {
+    return new TextDecoder('iso-8859-2').decode(r.bytes);
+  }
+}
+
+async function readHub3(input, extra) {
+  const results = await ZXingWASM.readBarcodes(input, { ...ZX_BASE, ...extra });
+  return results.length ? decodeHub3Bytes(results[0]) : null;
+}
+
+const SCAN_CANVAS = document.createElement('canvas');
+const SCAN_CTX = SCAN_CANVAS.getContext('2d', { willReadFrequently: true });
+
+// PDF417 decoding tolerates only ~±3° of skew, so callers sweep angles
+function toImageData(src, [sx, sy, sw, sh], maxDim, deg) {
+  const scale = Math.min(1, maxDim / Math.max(sw, sh));
+  const w = sw * scale;
+  const h = sh * scale;
+  const rad = (deg * Math.PI) / 180;
+  const cw = Math.round(Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad)));
+  const ch = Math.round(Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad)));
+  SCAN_CANVAS.width = cw;
+  SCAN_CANVAS.height = ch;
+  SCAN_CTX.fillStyle = '#fff';
+  SCAN_CTX.fillRect(0, 0, cw, ch);
+  SCAN_CTX.setTransform(1, 0, 0, 1, cw / 2, ch / 2);
+  SCAN_CTX.rotate(rad);
+  SCAN_CTX.drawImage(src, sx, sy, sw, sh, -w / 2, -h / 2, w, h);
+  SCAN_CTX.setTransform(1, 0, 0, 1, 0, 0);
+  return SCAN_CTX.getImageData(0, 0, cw, ch);
+}
+
+const FILE_ANGLES = [0, -4, 4, -8, 8, -12, 12, -16, 16, -20, 20];
+
+async function decodeImageFile(file) {
+  const direct = await readHub3(file);
+  if (direct) return direct;
+
+  const bmp = await createImageBitmap(file);
+  const rect = [0, 0, bmp.width, bmp.height];
+  try {
+    for (const maxDim of [2000, 1200]) {
+      for (const deg of FILE_ANGLES) {
+        const text = await readHub3(toImageData(bmp, rect, maxDim, deg), { tryDenoise: maxDim < 2000 });
+        if (text) return text;
+      }
+    }
+    return await readHub3(toImageData(bmp, rect, 2000, 0), { binarizer: 'GlobalHistogram' });
+  } finally {
+    bmp.close?.();
+  }
+}
+
+function scannerMissing(status) {
+  if (typeof ZXingWASM !== 'undefined') return false;
+  status.innerHTML = '<span style="color:var(--accent)">✗ Skener biblioteka nije se učitala. Provjeri internet i refreshaj, ili paste-aj tekst.</span>';
+  return true;
+}
 
 async function handleFile(file) {
   const status = $('scan-status');
+  if (scannerMissing(status)) return;
   status.innerHTML = '<span style="color:var(--warn)">⏳ Učitavam sliku i tražim barkod…</span>';
 
-  if (typeof ZXing === 'undefined') {
-    status.innerHTML = '<span style="color:var(--accent)">✗ Skener biblioteka nije se učitala. Probaj paste teksta umjesto slike.</span>';
-    return;
-  }
-
   try {
-    const imgUrl = URL.createObjectURL(file);
-    // ZXing.BrowserMultiFormatReader handles PDF417, QR, Code 128, etc.
-    const reader = new ZXing.BrowserMultiFormatReader();
-
-    let result;
-    try {
-      result = await reader.decodeFromImageUrl(imgUrl);
-    } finally {
-      URL.revokeObjectURL(imgUrl);
-    }
-
-    if (!result) {
-      status.innerHTML = '<span style="color:var(--accent)">✗ Barkod nije pronađen. Probaj jasniju sliku ili paste tekst ručno.</span>';
+    const text = await decodeImageFile(file);
+    if (!text) {
+      status.innerHTML = '<span style="color:var(--accent)">✗ Barkod nije pronađen. Probaj bližu i oštriju sliku (barkod preko cijele širine), ili kameru uživo.</span>';
       return;
     }
-
-    const decoded = fixBarcodeCharset(result.getText ? result.getText() : String(result));
-    if (!decoded.startsWith('HRVHUB30')) {
-      status.innerHTML = `<span style="color:var(--warn)">⚠ Barkod pronađen ali ne počinje s HRVHUB30. Sadržaj: ${esc(decoded.substring(0, 60))}…</span>`;
-      // Still populate the textarea so user can inspect
-      $('hub3-text').value = decoded;
-      document.querySelector('.tab[data-tab="text"]').click();
-      return;
-    }
-    status.innerHTML = '<span style="color:var(--ok)">✓ Barkod uspješno pročitan</span>';
-    $('hub3-text').value = decoded;
-    document.querySelector('.tab[data-tab="text"]').click();
-    parseAndRender(decoded);
+    onBarcodeDecoded(text, status);
   } catch (err) {
     status.innerHTML = `<span style="color:var(--accent)">✗ Greška pri čitanju: ${esc(err.message || err)}</span>`;
   }
 }
 
-// HUB3 PDF417 is ISO-8859-2, but ZXing decodes it as ISO-8859-1
-function fixBarcodeCharset(text) {
-  if (/[^\x00-\xFF]/.test(text)) return text;
-  const bytes = Uint8Array.from(text, (c) => c.charCodeAt(0));
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    return new TextDecoder('iso-8859-2').decode(bytes);
+function onBarcodeDecoded(raw, status) {
+  const decoded = raw.trimStart();
+  $('hub3-text').value = decoded;
+  if (!decoded.startsWith('HRVHUB30')) {
+    status.innerHTML = `<span style="color:var(--warn)">⚠ Barkod pronađen ali ne počinje s HRVHUB30. Sadržaj: ${esc(decoded.substring(0, 60))}…</span>`;
+    document.querySelector('.tab[data-tab="text"]').click();
+    return;
   }
+  status.innerHTML = '<span style="color:var(--ok)">✓ Barkod uspješno pročitan</span>';
+  parseAndRender(decoded);
+  if (!window._lastResult?.payload) return;
+  if (IS_MOBILE) openRevolutFlow();
+  else $('qr-output').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// --- Live camera ---
+const cam = { stream: null, track: null, running: false, torch: false };
+
+$('cam-start').addEventListener('click', startCamera);
+$('cam-stop').addEventListener('click', stopCamera);
+$('cam-torch').addEventListener('click', toggleTorch);
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopCamera(); });
+
+async function startCamera() {
+  const status = $('cam-status');
+  if (scannerMissing(status)) return;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    status.innerHTML = '<span style="color:var(--accent)">✗ Preglednik ne daje pristup kameri (treba HTTPS). Koristi tab "Slika".</span>';
+    return;
+  }
+
+  try {
+    cam.stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+    });
+  } catch (err) {
+    status.innerHTML = `<span style="color:var(--accent)">✗ Kamera nije dostupna: ${esc(err.message || err.name)}</span>`;
+    return;
+  }
+
+  const video = $('cam-video');
+  video.srcObject = cam.stream;
+  await video.play().catch(() => {});
+
+  cam.track = cam.stream.getVideoTracks()[0];
+  const caps = cam.track.getCapabilities?.() || {};
+  if (caps.focusMode?.includes('continuous')) {
+    cam.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+  }
+
+  $('cam-torch').style.display = caps.torch ? '' : 'none';
+  $('cam-box').classList.add('on');
+  $('cam-start').style.display = 'none';
+  $('cam-stop').style.display = '';
+  status.innerHTML = '<span style="color:var(--warn)">⏳ Tražim barkod…</span>';
+
+  cam.running = true;
+  scanFrame(video, 0);
+}
+
+function stopCamera() {
+  cam.running = false;
+  cam.stream?.getTracks().forEach((t) => t.stop());
+  cam.stream = null;
+  cam.track = null;
+  cam.torch = false;
+  $('cam-video').srcObject = null;
+  $('cam-box').classList.remove('on');
+  $('cam-start').style.display = '';
+  $('cam-stop').style.display = 'none';
+  $('cam-torch').style.display = 'none';
+}
+
+async function toggleTorch() {
+  if (!cam.track) return;
+  cam.torch = !cam.torch;
+  try {
+    await cam.track.applyConstraints({ advanced: [{ torch: cam.torch }] });
+  } catch {
+    cam.torch = false;
+  }
+}
+
+const CAM_ANGLES = [0, -6, 6, -12, 12];
+
+// Alternates guide-box crop (matches .cam-guide) / full frame, sweeping skew angles
+async function scanFrame(video, frame) {
+  if (!cam.running) return;
+
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (vw && vh) {
+    const rect = frame % 2 === 0
+      ? [Math.round(vw * 0.05), Math.round(vh * 0.3), Math.round(vw * 0.9), Math.round(vh * 0.4)]
+      : [0, 0, vw, vh];
+    const deg = CAM_ANGLES[Math.floor(frame / 2) % CAM_ANGLES.length];
+
+    try {
+      const text = await readHub3(toImageData(video, rect, 1600, deg), { tryInvert: false });
+      if (text && cam.running) {
+        navigator.vibrate?.(80);
+        stopCamera();
+        onBarcodeDecoded(text, $('cam-status'));
+        return;
+      }
+    } catch {}
+  }
+
+  setTimeout(() => scanFrame(video, frame + 1), 50);
 }
 
 // --- Render ---
@@ -843,6 +1043,7 @@ function parseAndRender(text) {
   const epcAlertsBox = $('epc-alerts');
   alertsBox.innerHTML = '';
   epcAlertsBox.innerHTML = '';
+  window._lastResult = null;
 
   if (!text || !text.trim()) {
     showAlert(alertsBox, 'error', 'Unesi HUB3 tekst.');
@@ -878,8 +1079,8 @@ function parseAndRender(text) {
   // Generate QR
   renderQR(result.payload);
 
-  // Store globally for Revolut share button
   window._lastResult = result;
+  saveState({ text });
 }
 
 function renderParsed(result) {
@@ -1015,38 +1216,70 @@ $('copy-text').addEventListener('click', async () => {
 });
 
 // --- Open in Revolut ---
-// Revolut nema javni deep link za prefilling bank transfera. Workaround:
-// kopiramo IBAN u clipboard, pokažemo modal s ostalim podacima za paste,
-// pa otvorimo Revolut app preko revolut://app/payments (ako instalirano).
-$('open-revolut').addEventListener('click', async () => {
-  const r = window._lastResult;
-  if (!r || !r.parsed) {
+// Revolut nema javni deep link koji prefila bank transfer (IBAN, iznos, opis).
+// Najbliže: jedan tap kopira IBAN i otvori Revolut app; ostala polja su
+// u modalu s copy gumbima i ostaju tu kad se vratiš iz Revoluta.
+const UA = navigator.userAgent;
+const IS_ANDROID = /Android/i.test(UA);
+const IS_IOS = /iPhone|iPad|iPod/i.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_MOBILE = IS_ANDROID || IS_IOS;
+const REVOLUT_PLAY_URL = 'https://play.google.com/store/apps/details?id=com.revolut.revolut';
+const REVOLUT_APP_URL = IS_ANDROID
+  ? `intent://#Intent;scheme=revolut;package=com.revolut.revolut;S.browser_fallback_url=${encodeURIComponent(REVOLUT_PLAY_URL)};end`
+  : 'revolut://';
+const STORAGE_KEY = 'hub3epc:last';
+const RESTORE_MAX_AGE_MS = 30 * 60 * 1000;
+
+function saveState(patch) {
+  try {
+    const prev = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...prev, ...patch, ts: Date.now() }));
+  } catch {}
+}
+
+function loadState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    return s && Date.now() - s.ts < RESTORE_MAX_AGE_MS ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+$('open-revolut').addEventListener('click', () => {
+  if (!window._lastResult?.parsed) {
     alert('Prvo parsiraj HUB3 podatke.');
     return;
   }
-  const p = r.parsed;
-  const iban = p.iban.replace(/\s/g, '').toUpperCase();
-  const epcAmount = (() => { try { return hub3AmountToEPC(p.amount, p.currency); } catch { return ''; } })();
-  const amountForDisplay = epcAmount.replace(/^[A-Z]{3}/, ''); // strip "EUR"
-  const ref = buildUnstructuredRef(p.model, p.reference);
-
-  // Copy IBAN to clipboard automatically
-  let copied = false;
-  try {
-    await navigator.clipboard.writeText(iban);
-    copied = true;
-  } catch {}
-
-  // Show explanation modal
-  showRevolutModal({
-    iban, amount: amountForDisplay, currency: (p.currency || 'EUR'),
-    name: p.receiverName, ref, desc: p.description, copied
-  });
+  openRevolutFlow();
 });
 
-function showRevolutModal({ iban, amount, currency, name, ref, desc, copied }) {
-  // Remove existing if any
+function openRevolutFlow() {
+  const p = window._lastResult.parsed;
+  const epcAmount = (() => { try { return hub3AmountToEPC(p.amount, p.currency); } catch { return ''; } })();
+  const ref = buildUnstructuredRef(p.model, p.reference);
+  showRevolutModal({
+    iban: p.iban.replace(/\s/g, '').toUpperCase(),
+    amount: epcAmount.replace(/^[A-Z]{3}/, ''),
+    currency: p.currency || 'EUR',
+    name: p.receiverName,
+    reference: [ref, p.description].filter(Boolean).join(' — '),
+  });
+}
+
+function copyText(text) {
+  return navigator.clipboard?.writeText(text) ?? Promise.reject(new Error('no clipboard'));
+}
+
+function showRevolutModal({ iban, amount, currency, name, reference }) {
   document.getElementById('revolut-modal')?.remove();
+  saveState({ rvOpen: true });
+
+  const field = (label, value) => value ? `
+    <div class="rv-field">
+      <div class="rv-label">${esc(label)}</div>
+      <div class="rv-row"><code>${esc(value)}</code><button class="btn-mini" data-copy="${esc(value)}">Kopiraj</button></div>
+    </div>` : '';
 
   const modal = document.createElement('div');
   modal.id = 'revolut-modal';
@@ -1056,74 +1289,91 @@ function showRevolutModal({ iban, amount, currency, name, ref, desc, copied }) {
       <div class="modal-head">
         <div>
           <div class="h-num">REVOLUT TRANSFER</div>
-          <h2 style="font-family:'Fraunces',serif;font-size:22px;">Podaci za uplatu</h2>
+          <h2 style="font-family:'Fraunces',serif;font-size:22px;">${esc(amount)} ${esc(currency)} → ${esc(name)}</h2>
         </div>
         <button class="modal-close" aria-label="Zatvori">×</button>
       </div>
       <div class="modal-body">
-        <p class="modal-intro">Revolut nema javni deep link s prefilanim podacima — moraš ih unijeti ručno. ${copied ? '<strong>IBAN je već kopiran u clipboard.</strong>' : ''}</p>
+        <div class="modal-actions" style="margin-bottom:14px">
+          <a href="${REVOLUT_APP_URL}" class="btn btn-revolut" id="rv-launch" style="flex:1;text-align:center">↗ Kopiraj IBAN i otvori Revolut</a>
+        </div>
 
         <ol class="rv-steps">
-          <li><strong>Otvori Revolut</strong> i odaberi <em>Payments → New payment → Bank transfer</em></li>
-          <li><strong>Paste IBAN</strong> u polje za broj računa ${copied ? '(već je kopiran)' : '(klikni "Kopiraj IBAN" dolje)'}</li>
-          <li><strong>Unesi ostale podatke</strong> ispod (svaki redak ima svoj copy gumb)</li>
+          <li>U Revolutu: <em>Plaćanja → Novi → Bankovni prijenos</em></li>
+          <li><strong>Paste IBAN</strong> (već je u clipboardu nakon tapa gore)</li>
+          <li>Vrati se ovdje za ime, iznos i opis — svaki ima svoj copy gumb</li>
         </ol>
 
         <div class="rv-fields">
-          <div class="rv-field">
-            <div class="rv-label">IBAN ${copied ? '<span class="rv-badge">u clipboardu</span>' : ''}</div>
-            <div class="rv-row"><code>${esc(iban)}</code><button class="btn-mini" data-copy="${esc(iban)}">Kopiraj</button></div>
-          </div>
-          <div class="rv-field">
-            <div class="rv-label">Primatelj</div>
-            <div class="rv-row"><code>${esc(name)}</code><button class="btn-mini" data-copy="${esc(name)}">Kopiraj</button></div>
-          </div>
-          <div class="rv-field">
-            <div class="rv-label">Iznos (${esc(currency)})</div>
-            <div class="rv-row"><code>${esc(amount)}</code><button class="btn-mini" data-copy="${esc(amount)}">Kopiraj</button></div>
-          </div>
-          ${ref ? `<div class="rv-field">
-            <div class="rv-label">Reference / opis</div>
-            <div class="rv-row"><code>${esc(ref)}${desc ? ' — ' + esc(desc) : ''}</code><button class="btn-mini" data-copy="${esc(ref + (desc ? ' — ' + desc : ''))}">Kopiraj</button></div>
-          </div>` : (desc ? `<div class="rv-field">
-            <div class="rv-label">Opis</div>
-            <div class="rv-row"><code>${esc(desc)}</code><button class="btn-mini" data-copy="${esc(desc)}">Kopiraj</button></div>
-          </div>` : '')}
+          ${field('IBAN', iban)}
+          ${field('Primatelj', name)}
+          ${field(`Iznos (${currency})`, amount)}
+          ${field('Referenca / opis', reference)}
         </div>
 
         <div class="modal-actions">
-          <a href="revolut://app/payments" class="btn btn-revolut" id="rv-launch">↗ Otvori Revolut app</a>
+          <button class="btn" id="rv-share" style="display:none">⇪ Podijeli QR sliku</button>
           <button class="btn" id="rv-close">Zatvori</button>
         </div>
-        <p class="modal-foot">Ako se Revolut ne otvori automatski, otvori app ručno — podaci ostaju ovdje.</p>
+        <p class="modal-foot">Revolut ne podržava automatsko popunjavanje uplate izvana, pa se polja unose copy/paste-om. Podaci ostaju ovdje dok se ne vratiš.</p>
       </div>
     </div>
   `;
   document.body.appendChild(modal);
 
-  modal.querySelector('.modal-close').addEventListener('click', () => modal.remove());
-  modal.querySelector('#rv-close').addEventListener('click', () => modal.remove());
-  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  const close = () => {
+    modal.remove();
+    saveState({ rvOpen: false });
+  };
+  modal.querySelector('.modal-close').addEventListener('click', close);
+  modal.querySelector('#rv-close').addEventListener('click', close);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 
-  // Wire up copy buttons
-  modal.querySelectorAll('[data-copy]').forEach(btn => {
+  // Copy runs inside the tap gesture; the link's default navigation opens the app
+  modal.querySelector('#rv-launch').addEventListener('click', () => {
+    copyText(iban).catch(() => {});
+  });
+
+  modal.querySelectorAll('[data-copy]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(btn.dataset.copy);
+        await copyText(btn.dataset.copy);
         const orig = btn.textContent;
         btn.textContent = '✓';
-        setTimeout(() => btn.textContent = orig, 1200);
+        setTimeout(() => (btn.textContent = orig), 1200);
       } catch {
         alert('Kopiranje nije uspjelo.');
       }
     });
   });
+
+  setupQrShare(modal.querySelector('#rv-share'));
+}
+
+// Lets the user hand the EPC QR image to an app that can scan from gallery
+function setupQrShare(btn) {
+  if (!navigator.canShare || $('qrcanvas').style.display === 'none') return;
+  $('qrcanvas').toBlob((blob) => {
+    if (!blob) return;
+    const file = new File([blob], 'epc-qr.png', { type: 'image/png' });
+    if (!navigator.canShare({ files: [file] })) return;
+    btn.style.display = '';
+    btn.addEventListener('click', () => navigator.share({ files: [file] }).catch(() => {}));
+  }, 'image/png');
 }
 
 // Auto-parse on textarea blur if there's content
 $('hub3-text').addEventListener('blur', () => {
   if ($('hub3-text').value.trim()) parseAndRender($('hub3-text').value);
 });
+
+// Restore last bill when returning from Revolut (mobile browsers may reload the page)
+const restored = loadState();
+if (restored?.text) {
+  $('hub3-text').value = restored.text;
+  parseAndRender(restored.text);
+  if (restored.rvOpen && window._lastResult?.payload) openRevolutFlow();
+}
 
 // =========================================================================
 // PWA: Service Worker registration

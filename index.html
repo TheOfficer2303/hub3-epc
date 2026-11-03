@@ -956,7 +956,7 @@ function onBarcodeDecoded(raw, status) {
   status.innerHTML = '<span style="color:var(--ok)">✓ Barkod uspješno pročitan</span>';
   parseAndRender(decoded);
   if (!window._lastResult?.payload) return;
-  if (IS_MOBILE) openRevolutFlow();
+  if (IS_MOBILE) showQrOffer();
   else $('qr-output').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
@@ -1351,12 +1351,54 @@ function esc(s) {
 }
 
 // --- Download / copy ---
-$('download-qr').addEventListener('click', () => {
+$('download-qr').addEventListener('click', downloadQR);
+
+function downloadQR() {
   const link = document.createElement('a');
   link.download = 'epc-qr.png';
   link.href = $('qrcanvas').toDataURL('image/png');
   link.click();
-});
+}
+
+function showQrOffer() {
+  document.getElementById('qr-offer')?.remove();
+  const p = window._lastResult.parsed;
+  const amount = (() => { try { return hub3AmountToEPC(p.amount, p.currency).replace(/^([A-Z]{3})(.*)$/, '$2 $1'); } catch { return ''; } })();
+
+  const modal = document.createElement('div');
+  modal.id = 'qr-offer';
+  modal.className = 'modal-backdrop';
+  modal.innerHTML = `
+    <div class="modal">
+      <div class="modal-head">
+        <div>
+          <div class="h-num">EPC QR SPREMAN</div>
+          <h2 style="font-family:'Fraunces',serif;font-size:22px;">${esc(amount)} → ${esc(p.receiverName)}</h2>
+        </div>
+        <button class="modal-close" aria-label="Zatvori">×</button>
+      </div>
+      <div class="modal-body" style="text-align:center">
+        <img src="${$('qrcanvas').toDataURL('image/png')}" alt="EPC QR" style="width:220px;max-width:100%;border:1px solid var(--ink)">
+        <div class="modal-actions" style="justify-content:center;margin-top:14px">
+          <button class="btn btn-primary" id="qo-download">↓ Preuzmi QR</button>
+          <button class="btn" id="qo-share" style="display:none">⇪ Podijeli</button>
+          <button class="btn" id="qo-close">Zatvori</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const close = () => modal.remove();
+  modal.querySelector('.modal-close').addEventListener('click', close);
+  modal.querySelector('#qo-close').addEventListener('click', close);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  modal.querySelector('#qo-download').addEventListener('click', () => {
+    downloadQR();
+    close();
+  });
+  setupQrShare(modal.querySelector('#qo-share'));
+}
 
 $('copy-text').addEventListener('click', async () => {
   const text = $('epc-text').textContent.replace(/\\n\n/g, '\n');

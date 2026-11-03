@@ -13,7 +13,7 @@ Konvertira hrvatsku HUB3 uplatnicu (PDF417 barkod) u EPC QR kod koji se može sk
 ## Skeniranje i Revolut
 
 - **Kamera uživo** (tab "Kamera") ili upload slike/screenshota — dekoder je zxing-cpp (WASM), radi i s nagnutim (do ~20°), mutnim i šumovitim fotografijama.
-- Na mobitelu se nakon skena odmah otvara Revolut ekran: jedan tap kopira IBAN i otvara Revolut app, a ime, iznos i opis imaju copy gumbe. Podaci ostaju i kad se vratiš iz Revoluta.
+- Na mobitelu se nakon skena nudi preuzimanje EPC QR koda. Gumb "Otvori u Revolutu" kopira IBAN i otvara Revolut na plaćanjima, a ime, iznos i opis imaju copy gumbe.
 - Revolut nema javni deep link koji bi automatski popunio uplatu, pa se polja paste-aju ručno.
 
 ## Troubleshooting

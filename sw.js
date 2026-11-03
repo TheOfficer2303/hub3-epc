@@ -1,7 +1,7 @@
 // HUB3 → EPC QR PWA Service Worker
 // Strategy: cache-first for app shell and libraries, network-first for HTML
 
-const CACHE_NAME = 'hub3-epc-v3';
+const CACHE_NAME = 'hub3-epc-v4';
 const APP_SHELL = [
   './',
   './index.html',
@@ -11,7 +11,8 @@ const APP_SHELL = [
   './icon-512.png',
   // External libs (will be cached on first successful fetch)
   'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js',
-  'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js',
+  'https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.6/dist/iife/reader/index.js',
+  'https://fastly.jsdelivr.net/npm/zxing-wasm@3.1.6/dist/reader/zxing_reader.wasm',
   // Fonts
   'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&display=swap',
 ];
@@ -26,7 +27,7 @@ self.addEventListener('install', (event) => {
       // Cache external resources optimistically (don't fail install)
       const external = APP_SHELL.filter(u => u.startsWith('http'));
       await Promise.allSettled(
-        external.map(url => fetch(url, { mode: 'no-cors' }).then(res => cache.put(url, res)))
+        external.map(url => fetch(url, { mode: 'cors' }).then(res => res.ok && cache.put(url, res)))
       );
       self.skipWaiting();
     })
@@ -42,10 +43,23 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch: cache-first for everything, network fallback, then cached HTML for offline navigation
+// Fetch: network-first for navigation, cache-first for everything else
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
+
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req).then((response) => {
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(c => c.put('./index.html', clone));
+        }
+        return response;
+      }).catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(req).then((cached) => {

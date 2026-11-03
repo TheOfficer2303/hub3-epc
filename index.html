@@ -1381,8 +1381,8 @@ const IS_IOS = /iPhone|iPad|iPod/i.test(UA) || (navigator.platform === 'MacIntel
 const IS_MOBILE = IS_ANDROID || IS_IOS;
 const REVOLUT_PLAY_URL = 'https://play.google.com/store/apps/details?id=com.revolut.revolut';
 const REVOLUT_APP_URL = IS_ANDROID
-  ? `intent://#Intent;scheme=revolut;package=com.revolut.revolut;S.browser_fallback_url=${encodeURIComponent(REVOLUT_PLAY_URL)};end`
-  : 'revolut://';
+  ? `intent://app/payments#Intent;scheme=revolut;package=com.revolut.revolut;S.browser_fallback_url=${encodeURIComponent(REVOLUT_PLAY_URL)};end`
+  : 'revolut://app/payments';
 const STORAGE_KEY = 'hub3epc:last';
 const RESTORE_MAX_AGE_MS = 30 * 60 * 1000;
 
@@ -1455,7 +1455,7 @@ function showRevolutModal({ iban, amount, currency, name, reference }) {
         </div>
 
         <ol class="rv-steps">
-          <li>U Revolutu: <em>Plaćanja → Novi → Bankovni prijenos</em></li>
+          <li>Revolut se otvara na plaćanjima: <em>Novi → Bankovni prijenos</em></li>
           <li><strong>Paste IBAN</strong> (već je u clipboardu nakon tapa gore)</li>
           <li>Vrati se ovdje za ime, iznos i opis — svaki ima svoj copy gumb</li>
         </ol>
@@ -1522,26 +1522,6 @@ function setupQrShare(btn) {
 $('hub3-text').addEventListener('blur', () => {
   if ($('hub3-text').value.trim()) parseAndRender($('hub3-text').value);
 });
-
-// ?rvtest: candidate Revolut deep links to try on a real phone (none are documented)
-if (new URLSearchParams(location.search).has('rvtest')) {
-  const pkg = 'package=com.revolut.revolut';
-  const links = [
-    ...['app/payments', 'payments', 'transfers', 'transfer', 'home', 'app', 'main', 'scan'].map((p) => `revolut://${p}`),
-    ...['', 'payments', 'transfers', 'home', 'hub', 'scan'].map((p) => `https://revolut.com/app/${p}`),
-  ];
-  const href = (url) => {
-    if (!IS_ANDROID) return url;
-    const [scheme, rest] = url.split('://');
-    return `intent://${rest}#Intent;scheme=${scheme};${pkg};end`;
-  };
-  const box = document.createElement('section');
-  box.className = 'panel';
-  box.style.marginBottom = '24px';
-  box.innerHTML = '<div class="h-num">REVOLUT LINK TEST</div><p class="h-desc">Tapni svaki link i zapamti brojeve koji otvore Revolut bez greške.</p>'
-    + links.map((u, i) => `<p style="margin:6px 0"><a class="btn" style="display:block;text-transform:none" href="${esc(href(u))}">${i + 1}. ${esc(u)}</a></p>`).join('');
-  document.querySelector('.wrap').prepend(box);
-}
 
 // Restore last bill when returning from Revolut (mobile browsers may reload the page)
 const restored = loadState();

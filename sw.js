@@ -1,7 +1,7 @@
 // HUB3 → EPC QR PWA Service Worker
 // Strategy: cache-first for app shell and libraries, network-first for HTML
 
-const CACHE_NAME = 'hub3-epc-v5';
+const CACHE_NAME = 'hub3-epc-v6';
 const APP_SHELL = [
   './',
   './index.html',

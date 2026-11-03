@@ -187,7 +187,23 @@
     display: none;
   }
   .cam-box.on { display: block; }
-  .cam-box video { display: block; width: 100%; height: auto; }
+  .cam-box video { display: block; width: 100%; height: auto; cursor: crosshair; }
+  .cam-focus-ring {
+    position: absolute;
+    width: 64px; height: 64px;
+    margin: -32px 0 0 -32px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .cam-focus-ring.on { animation: focusRing 0.8s ease-out; }
+  @keyframes focusRing {
+    from { opacity: 1; transform: scale(1.4); }
+    to { opacity: 0; transform: scale(1); }
+  }
+  .cam-focus-row { display: block; margin-top: 10px; }
+  .cam-focus-row input { width: 100%; accent-color: var(--accent); }
   .cam-guide {
     position: absolute;
     left: 5%; right: 5%; top: 30%; bottom: 30%;
@@ -275,6 +291,7 @@
     background: white;
     padding: 12px;
     border: 1px solid var(--ink);
+    width: 320px;
     max-width: 100%;
     height: auto;
   }
@@ -460,12 +477,19 @@
       <div class="cam-box" id="cam-box">
         <video id="cam-video" playsinline muted></video>
         <div class="cam-guide"></div>
-        <div class="cam-hint">Barkod vodoravno unutar okvira, cijeli i oštar</div>
+        <div class="cam-focus-ring" id="cam-focus-ring"></div>
+        <div class="cam-hint" id="cam-hint">Barkod vodoravno unutar okvira, cijeli i oštar</div>
       </div>
+      <label class="cam-focus-row" id="cam-focus-row" style="display:none">
+        <span class="label">Ručni fokus (lijevo = blizu)</span>
+        <input type="range" id="cam-focus">
+      </label>
       <div class="btn-row">
         <button class="btn btn-primary" id="cam-start">▶ Pokreni kameru</button>
         <button class="btn" id="cam-stop" style="display:none">■ Zaustavi</button>
         <button class="btn" id="cam-torch" style="display:none">☀ Svjetlo</button>
+        <button class="btn" id="cam-zoom" style="display:none">🔍 1×</button>
+        <button class="btn" id="cam-switch" style="display:none">⟲ Druga kamera</button>
       </div>
       <div id="cam-status" class="helper"></div>
     </div>
@@ -937,12 +961,106 @@ function onBarcodeDecoded(raw, status) {
 }
 
 // --- Live camera ---
-const cam = { stream: null, track: null, running: false, torch: false };
+const cam = { stream: null, track: null, caps: {}, running: false, torch: false, zoomSteps: [], zoom: 1, deviceIds: [] };
+const CAM_DEVICE_KEY = 'hub3epc:camera';
 
 $('cam-start').addEventListener('click', startCamera);
 $('cam-stop').addEventListener('click', stopCamera);
 $('cam-torch').addEventListener('click', toggleTorch);
+$('cam-zoom').addEventListener('click', cycleZoom);
+$('cam-switch').addEventListener('click', switchCamera);
+$('cam-focus').addEventListener('input', (e) => setManualFocus(Number(e.target.value)));
+$('cam-video').addEventListener('click', tapToFocus);
 document.addEventListener('visibilitychange', () => { if (document.hidden) stopCamera(); });
+
+const hasAutofocus = (caps) => caps.focusMode?.includes('continuous');
+
+async function openCamera(deviceId) {
+  cam.stream?.getTracks().forEach((t) => t.stop());
+  cam.stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }),
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      advanced: [{ focusMode: 'continuous' }],
+    },
+  });
+  cam.track = cam.stream.getVideoTracks()[0];
+  cam.caps = cam.track.getCapabilities?.() || {};
+  const video = $('cam-video');
+  video.srcObject = cam.stream;
+  await video.play().catch(() => {});
+}
+
+async function listBackCameras() {
+  const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+  const back = inputs.filter((d) => /back|rear|environment/i.test(d.label));
+  return (back.length ? back : inputs).map((d) => d.deviceId);
+}
+
+// facingMode often lands on the fixed-focus ultra-wide lens on Android, so look for one with autofocus
+async function pickCamera() {
+  let saved = null;
+  try { saved = localStorage.getItem(CAM_DEVICE_KEY); } catch {}
+  let isSavedOpen = false;
+  if (saved) {
+    try {
+      await openCamera(saved);
+      isSavedOpen = true;
+    } catch {}
+  }
+  if (!isSavedOpen) await openCamera(null);
+  cam.deviceIds = await listBackCameras();
+  if (isSavedOpen || hasAutofocus(cam.caps)) return;
+
+  const firstId = cam.track.getSettings().deviceId;
+  for (const id of cam.deviceIds) {
+    if (id === firstId) continue;
+    try {
+      await openCamera(id);
+    } catch {
+      continue;
+    }
+    if (hasAutofocus(cam.caps)) return rememberCamera();
+  }
+  await openCamera(firstId);
+}
+
+function rememberCamera() {
+  try { localStorage.setItem(CAM_DEVICE_KEY, cam.track.getSettings().deviceId); } catch {}
+}
+
+function setupCameraControls() {
+  const caps = cam.caps;
+  if (hasAutofocus(caps)) {
+    cam.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+  }
+
+  $('cam-torch').style.display = caps.torch ? '' : 'none';
+  $('cam-switch').style.display = cam.deviceIds.length > 1 ? '' : 'none';
+
+  cam.zoomSteps = caps.zoom ? [1, 2, 3].filter((z) => z >= caps.zoom.min && z <= caps.zoom.max) : [];
+  $('cam-zoom').style.display = cam.zoomSteps.length > 1 ? '' : 'none';
+  // 2× lets the phone stay beyond its minimum focus distance
+  if (cam.zoomSteps.includes(2)) setZoom(2);
+
+  const fd = caps.focusDistance;
+  const isManualFocus = fd && caps.focusMode?.includes('manual') && fd.max > fd.min;
+  $('cam-focus-row').style.display = isManualFocus ? '' : 'none';
+  if (isManualFocus) {
+    const slider = $('cam-focus');
+    slider.min = fd.min;
+    slider.max = fd.max;
+    slider.step = fd.step || (fd.max - fd.min) / 100;
+    slider.value = cam.track.getSettings().focusDistance ?? fd.min;
+  }
+
+  const hasTapFocus = caps.focusMode?.some((m) => m === 'single-shot' || m === 'continuous');
+  $('cam-hint').textContent = hasTapFocus
+    ? 'Barkod vodoravno u okviru · dodirni sliku za fokus'
+    : 'Barkod vodoravno unutar okvira, cijeli i oštar';
+}
 
 async function startCamera() {
   const status = $('cam-status');
@@ -952,38 +1070,25 @@ async function startCamera() {
     return;
   }
 
+  status.innerHTML = '<span style="color:var(--warn)">⏳ Palim kameru…</span>';
   try {
-    cam.stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-      },
-    });
+    await pickCamera();
   } catch (err) {
+    stopCamera();
     status.innerHTML = `<span style="color:var(--accent)">✗ Kamera nije dostupna: ${esc(err.message || err.name)}</span>`;
     return;
   }
 
-  const video = $('cam-video');
-  video.srcObject = cam.stream;
-  await video.play().catch(() => {});
-
-  cam.track = cam.stream.getVideoTracks()[0];
-  const caps = cam.track.getCapabilities?.() || {};
-  if (caps.focusMode?.includes('continuous')) {
-    cam.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
-  }
-
-  $('cam-torch').style.display = caps.torch ? '' : 'none';
+  setupCameraControls();
   $('cam-box').classList.add('on');
   $('cam-start').style.display = 'none';
   $('cam-stop').style.display = '';
   status.innerHTML = '<span style="color:var(--warn)">⏳ Tražim barkod…</span>';
 
-  cam.running = true;
-  scanFrame(video, 0);
+  if (!cam.running) {
+    cam.running = true;
+    scanFrame($('cam-video'), 0);
+  }
 }
 
 function stopCamera() {
@@ -995,8 +1100,21 @@ function stopCamera() {
   $('cam-video').srcObject = null;
   $('cam-box').classList.remove('on');
   $('cam-start').style.display = '';
-  $('cam-stop').style.display = 'none';
-  $('cam-torch').style.display = 'none';
+  ['cam-stop', 'cam-torch', 'cam-zoom', 'cam-switch', 'cam-focus-row'].forEach((id) => ($(id).style.display = 'none'));
+}
+
+async function switchCamera() {
+  if (!cam.track || cam.deviceIds.length < 2) return;
+  const idx = cam.deviceIds.indexOf(cam.track.getSettings().deviceId);
+  try {
+    await openCamera(cam.deviceIds[(idx + 1) % cam.deviceIds.length]);
+  } catch (err) {
+    $('cam-status').innerHTML = `<span style="color:var(--accent)">✗ Ne mogu otvoriti tu kameru: ${esc(err.message || err.name)}</span>`;
+    return;
+  }
+  cam.torch = false;
+  rememberCamera();
+  setupCameraControls();
 }
 
 async function toggleTorch() {
@@ -1007,6 +1125,46 @@ async function toggleTorch() {
   } catch {
     cam.torch = false;
   }
+}
+
+async function setZoom(zoom) {
+  cam.zoom = zoom;
+  $('cam-zoom').textContent = `🔍 ${zoom}×`;
+  await cam.track?.applyConstraints({ advanced: [{ zoom }] }).catch(() => {});
+}
+
+function cycleZoom() {
+  const idx = cam.zoomSteps.indexOf(cam.zoom);
+  setZoom(cam.zoomSteps[(idx + 1) % cam.zoomSteps.length]);
+}
+
+function setManualFocus(focusDistance) {
+  cam.track?.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance }] }).catch(() => {});
+}
+
+async function tapToFocus(e) {
+  const modes = cam.caps.focusMode || [];
+  const mode = modes.includes('single-shot') ? 'single-shot' : modes.includes('continuous') ? 'continuous' : null;
+  if (!cam.track || !mode) return;
+
+  const rect = e.currentTarget.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width;
+  const y = (e.clientY - rect.top) / rect.height;
+  showFocusRing(e.clientX - rect.left, e.clientY - rect.top);
+
+  await cam.track.applyConstraints({ advanced: [{ focusMode: mode, pointsOfInterest: [{ x, y }] }] }).catch(() => {});
+  if (mode === 'single-shot' && modes.includes('continuous')) {
+    setTimeout(() => cam.track?.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {}), 2500);
+  }
+}
+
+function showFocusRing(x, y) {
+  const ring = $('cam-focus-ring');
+  ring.style.left = `${x}px`;
+  ring.style.top = `${y}px`;
+  ring.classList.remove('on');
+  void ring.offsetWidth;
+  ring.classList.add('on');
 }
 
 const CAM_ANGLES = [0, -6, 6, -12, 12];
@@ -1140,8 +1298,6 @@ function renderQR(payload) {
     const size = moduleCount * cellSize + margin * 2;
     canvas.width = size;
     canvas.height = size;
-    canvas.style.width = '320px';
-    canvas.style.height = '320px';
 
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#ffffff';
@@ -1366,6 +1522,26 @@ function setupQrShare(btn) {
 $('hub3-text').addEventListener('blur', () => {
   if ($('hub3-text').value.trim()) parseAndRender($('hub3-text').value);
 });
+
+// ?rvtest: candidate Revolut deep links to try on a real phone (none are documented)
+if (new URLSearchParams(location.search).has('rvtest')) {
+  const pkg = 'package=com.revolut.revolut';
+  const links = [
+    ...['app/payments', 'payments', 'transfers', 'transfer', 'home', 'app', 'main', 'scan'].map((p) => `revolut://${p}`),
+    ...['', 'payments', 'transfers', 'home', 'hub', 'scan'].map((p) => `https://revolut.com/app/${p}`),
+  ];
+  const href = (url) => {
+    if (!IS_ANDROID) return url;
+    const [scheme, rest] = url.split('://');
+    return `intent://${rest}#Intent;scheme=${scheme};${pkg};end`;
+  };
+  const box = document.createElement('section');
+  box.className = 'panel';
+  box.style.marginBottom = '24px';
+  box.innerHTML = '<div class="h-num">REVOLUT LINK TEST</div><p class="h-desc">Tapni svaki link i zapamti brojeve koji otvore Revolut bez greške.</p>'
+    + links.map((u, i) => `<p style="margin:6px 0"><a class="btn" style="display:block;text-transform:none" href="${esc(href(u))}">${i + 1}. ${esc(u)}</a></p>`).join('');
+  document.querySelector('.wrap').prepend(box);
+}
 
 // Restore last bill when returning from Revolut (mobile browsers may reload the page)
 const restored = loadState();
